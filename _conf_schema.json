@@ -1,0 +1,192 @@
+{
+  "arxiv_config": {
+    "description": "ArXiv 论文配置",
+    "type": "object",
+    "items": {
+      "categories": {
+        "description": "学科分类代码列表",
+        "type": "list",
+        "hint": "arXiv 学科分类，如 cs.AI, cs.LG, math.CO。使用 /arxiv categories 查看所有可用分类。",
+        "default": ["cs.AI"]
+      },
+      "tags": {
+        "description": "关键词标签（模糊匹配）",
+        "type": "list",
+        "hint": "额外的关键词标签，用于模糊匹配论文内容。留空则仅按分类筛选。",
+        "default": []
+      },
+      "max_results": {
+        "description": "每次推送/搜索的最大论文数量",
+        "type": "int",
+        "default": 1
+      },
+      "timeout_seconds": {
+        "description": "HTTP 请求超时 (秒)",
+        "type": "int",
+        "default": 30
+      }
+    }
+  },
+  "huggingface_config": {
+    "description": "Hugging Face 论文配置",
+    "type": "object",
+    "items": {
+      "max_results": {
+        "description": "每次推送/搜索的最大论文数量",
+        "type": "int",
+        "default": 1
+      },
+      "timeout_seconds": {
+        "description": "HTTP 请求超时 (秒)",
+        "type": "int",
+        "default": 30
+      },
+      "auto_install_playwright_browser": {
+        "description": "自动安装 Playwright 浏览器",
+        "type": "bool",
+        "hint": "仅在网页截图检测到浏览器缺失时生效。开启后将尝试执行 playwright install。",
+        "default": false
+      },
+      "playwright_install_timeout_seconds": {
+        "description": "Playwright 安装超时 (秒)",
+        "type": "int",
+        "hint": "自动安装 Playwright 浏览器的超时时间。仅在 auto_install_playwright_browser 开启时生效。",
+        "default": 180
+      }
+    }
+  },
+  "network_config": {
+    "description": "网络配置",
+    "type": "object",
+    "items": {
+      "proxy": {
+        "description": "全局代理地址",
+        "type": "string",
+        "hint": "形如 127.0.0.1:7890 或 http://127.0.0.1:7890。留空则不使用代理。",
+        "default": ""
+      }
+    }
+  },
+  "send_config": {
+    "description": "发送配置",
+    "type": "object",
+    "items": {
+      "push_time": {
+        "description": "ArXiv 每日推送时间",
+        "type": "string",
+        "hint": "格式 HH:MM，如 09:00 表示每天上午 9 点推送。",
+        "default": "09:00"
+      },
+      "huggingface_push_time": {
+        "description": "Hugging Face 每日推送时间",
+        "type": "string",
+        "hint": "格式 HH:MM，如 10:00 表示每天上午 10 点推送。",
+        "default": "10:00"
+      },
+      "push_timezone": {
+        "description": "推送时区",
+        "type": "string",
+        "default": "Asia/Shanghai"
+      },
+      "target_sessions": {
+        "description": "目标 UMO 会话列表",
+        "type": "list",
+        "hint": "自动推送的目标会话列表。可通过 /arxiv add_session 指令快捷添加当前会话。",
+        "default": []
+      },
+      "use_forward": {
+        "description": "使用合并转发",
+        "type": "bool",
+        "hint": "开启后使用合并转发模式发送论文，关闭则逐条发送。合并转发需平台支持（如 QQ）。",
+        "default": false
+      },
+      "bot_name": {
+        "description": "机器人昵称（兼容旧配置）",
+        "type": "string",
+        "hint": "旧版统一昵称。若配置了来源专属昵称，将优先使用来源专属配置。",
+        "default": "ArXiv Bot"
+      },
+      "arxiv_bot_name": {
+        "description": "ArXiv 机器人昵称（合并转发显示）",
+        "type": "string",
+        "default": "ArXiv Bot"
+      },
+      "huggingface_bot_name": {
+        "description": "Hugging Face 机器人昵称（合并转发显示）",
+        "type": "string",
+        "default": "Hugging Face Bot"
+      },
+      "send_abstract": {
+        "description": "发送论文摘要",
+        "type": "bool",
+        "default": true
+      },
+      "abstract_as_image": {
+        "description": "摘要渲染为图片",
+        "type": "bool",
+        "hint": "开启后摘要单独渲染为长图片发送，关闭则以纯文本形式发送。",
+        "default": false
+      },
+      "attach_pdf": {
+        "description": "附带 PDF 文件",
+        "type": "bool",
+        "default": true
+      },
+      "screenshot_pdf": {
+        "description": "截图 PDF 首页",
+        "type": "bool",
+        "default": true
+      },
+      "screenshot_dpi": {
+        "description": "截图 DPI",
+        "type": "int",
+        "hint": "PDF 首页截图的渲染精度，建议 72~300。数值越高越清晰，文件越大。",
+        "default": 150
+      },
+      "max_pdf_size_mb": {
+        "description": "PDF 最大体积限制 (MB)",
+        "type": "int",
+        "hint": "超出此大小的 PDF 将被跳过。",
+        "default": 20
+      },
+      "history_retention_days": {
+        "description": "已发送记录保留天数",
+        "type": "int",
+        "hint": "超过此天数的发送记录将被自动清理，用于去重。",
+        "default": 30
+      }
+    }
+  },
+  "llm_config": {
+    "description": "LLM 赋能配置",
+    "type": "object",
+    "items": {
+      "abstract_mode": {
+        "description": "摘要处理方式",
+        "type": "string",
+        "options": ["original", "llm_chinese"],
+        "hint": "original: 保留英文原文; llm_chinese: 使用 LLM 翻译为中文。",
+        "default": "original"
+      },
+      "llm_summarize": {
+        "description": "使用 LLM 总结论文",
+        "type": "bool",
+        "hint": "启用后将提取 PDF 文本并调用 LLM 生成中文总结。需要配置下方的 LLM 提供商。",
+        "default": false
+      },
+      "llm_provider_id": {
+        "description": "LLM 提供商（留空则使用当前对话的默认 LLM）",
+        "type": "string",
+        "_special": "select_provider",
+        "hint": "用于摘要翻译和论文总结的 LLM 提供商。留空将自动使用当前对话的默认 LLM 提供商。",
+        "default": ""
+      },
+      "llm_summary_prompt": {
+        "description": "自定义总结 Prompt",
+        "type": "text",
+        "hint": "自定义 LLM 总结 prompt，需包含 {content} 占位符。留空使用默认 prompt；若非空但缺少占位符，将回退默认 prompt 并告警。",
+        "default": ""
+      }
+    }
+  }
+}
