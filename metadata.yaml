@@ -1,9 +1,9 @@
-name: astrbot_plugin_arxiv
-display_name: ArXiv & Hugging Face Paper Pusher
-desc: ArXiv 和 Hugging Face 论文搜索与定时推送插件，支持 LLM 摘要翻译、PDF 处理、合并转发等。
-version: v1.0.1
+name: astrbot_plugin_paper
+display_name: Multi-Source Paper Pusher
+desc: 多来源论文搜索与定时推送插件，支持 ArXiv 与 Hugging Face，内置 LLM 摘要处理、PDF 处理与合并转发。
+version: v1.0.0
 author: NayukiChiba
-repo: https://github.com/NayukiChiba/astrbot_plugin_arxiv
+repo: https://github.com/<yourname>/astrbot_plugin_paper
 astrbot_version: ">=4.16"
 support_platforms:
   - aiocqhttp(OneBot v11)

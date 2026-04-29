@@ -16,7 +16,7 @@ from astrbot.api import logger
 from astrbot.api import logger
 
 HUGGINGFACE_API_URL = "https://huggingface.co/api/papers"
-_USER_AGENT = "AstrBot arxiv_plugin_arxiv/1.0"
+_USER_AGENT = "AstrBot astrbot_plugin_paper/1.0"
 _MAX_RETRIES = 3
 _INITIAL_RETRY_DELAY_SECONDS = 1.0
 

@@ -1,4 +1,4 @@
-"""AstrBot ArXiv 论文推送插件。
+"""AstrBot 多来源论文推送插件。
 
 支持定时推送、搜索、LLM 摘要翻译、PDF 处理、合并转发等。
 """
@@ -46,13 +46,13 @@ def _time_to_cron(time_str: str) -> str:
 
 
 @register(
-    "astrbot_plugin_arxiv",
+    "astrbot_plugin_paper",
     "NayukiChiba",
-    "ArXiv 论文搜索与定时推送插件",
-    "1.0.1",
+    "ArXiv 与 Hugging Face 论文搜索与定时推送插件",
+    "1.0.0",
 )
 class ArxivPlugin(Star):
-    """ArXiv 论文推送插件主类。"""
+    """多来源论文推送插件主类。"""
 
     def __init__(self, context: Context, config: AstrBotConfig) -> None:
         super().__init__(context)
@@ -99,7 +99,7 @@ class ArxivPlugin(Star):
         return None
 
     def _get_source_bot_name(self, source: str) -> str:
-        """获取来源对应的机器人显示名，兼容旧 bot_name 配置。"""
+        """获取来源对应的机器人显示名。"""
         if source == _SOURCE_HUGGINGFACE:
             specific_key = "huggingface_bot_name"
             default_name = "Hugging Face Bot"
@@ -367,7 +367,7 @@ class ArxivPlugin(Star):
     async def initialize(self) -> None:
         """插件初始化：加载历史、设置定时任务。"""
         # 初始化数据目录
-        self._data_dir = StarTools.get_data_dir("astrbot_plugin_arxiv")
+        self._data_dir = StarTools.get_data_dir("astrbot_plugin_paper")
         self._temp_dir = self._data_dir / "temp"
         self._temp_dir.mkdir(parents=True, exist_ok=True)
 

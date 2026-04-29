@@ -1,1 +1,1 @@
-"""AstrBot ArXiv 论文推送插件。"""
+"""AstrBot 多来源论文推送插件。"""

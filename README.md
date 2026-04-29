@@ -1,111 +1,115 @@
-# astrbot_plugin_arxiv
+# astrbot_plugin_paper
 
-ArXiv + Hugging Face 论文搜索与定时推送插件，适用于 [AstrBot](https://github.com/AstrBotDevs/AstrBot)。
+面向 [AstrBot](https://github.com/AstrBotDevs/AstrBot) 的多来源论文插件，支持 ArXiv 与 Hugging Face 的检索、获取、定时推送与去重，并提供 LLM 摘要处理与 PDF 增强能力。
 
 ## 功能特性
 
-- **论文搜索** — `/arxiv search <关键词> [数量]` 快速搜索论文，仅返回基本信息，不下载 PDF
-- **精确获取** — `/arxiv get <arxiv_id>` 通过 ID 获取单篇论文完整内容（摘要、PDF 截图、LLM 总结）
-- **最新论文** — `/arxiv latest` 获取配置分类下的最新论文（含完整内容）
-- **Hugging Face 论文** — `/huggingface search` 与 `/huggingface latest` 获取 Hugging Face 论文
-- **定时推送** — 每日定时推送，自动去重已发送论文
-- **学科分类筛选** — 支持选择 arXiv 学科分类（cs.AI、cs.LG、math.CO 等）
-- **关键词标签** — 支持自定义关键词标签进行模糊匹配
-- **目标会话** — 支持 UMO 会话列表，可通过指令快捷添加/移除
-- **发送模式** — 支持合并转发和逐条发送两种模式
-- **PDF 截图** — PDF 首页截图，DPI 可自由调整
-- **PDF 附件** — 可选附带 PDF 文件
-- **摘要处理** — 支持原文摘要或 LLM 翻译为中文
-- **摘要渲染** — 摘要可渲染为图片发送
-- **LLM 总结** — 使用 LLM 扫描 PDF 并总结论文，支持自定义 prompt
+- **多来源检索** - 同时支持 ArXiv 与 Hugging Face 论文来源
+- **快速搜索** - `/arxiv search` 与 `/huggingface search` 返回轻量搜索结果
+- **单篇精确获取** - `/arxiv get <arxiv_id>` 获取指定论文完整内容
+- **最新论文获取** - 支持按配置拉取 ArXiv 最新论文与 Hugging Face 每日论文
+- **定时推送与去重** - 支持分来源定时推送，自动跳过已发送论文
+- **会话管理** - 支持通过命令将当前会话添加/移除推送目标
+- **发送模式** - 支持逐条发送与合并转发
+- **PDF 增强** - 支持附带 PDF、首页截图、大小限制控制
+- **摘要处理** - 支持原文摘要、LLM 中文处理、摘要图片渲染
+- **LLM 论文总结** - 可基于论文内容生成中文总结，并支持自定义 Prompt
 
 ## 指令列表
 
 | 指令 | 说明 |
 |------|------|
-| `/arxiv help` | 显示帮助信息 |
-| `/arxiv search <关键词> [数量]` | 搜索 arXiv 论文（仅显示信息，数量可选，默认取配置值，最多 20） |
+| `/arxiv help` | 显示 ArXiv 指令帮助 |
+| `/arxiv search <关键词> [数量]` | 搜索 ArXiv 论文（仅显示基本信息，不下载 PDF） |
 | `/arxiv get <arxiv_id>` | 通过 arXiv ID 获取单篇论文完整内容（含 PDF 截图/LLM 总结） |
-| `/arxiv latest` | 获取已配置分类的最新论文 |
-| `/arxiv categories` | 列出所有支持的学科分类 |
-| `/arxiv status` | 查看插件配置和状态 |
-| `/arxiv add_session` | 将当前会话添加为定时推送目标 |
-| `/arxiv remove_session` | 将当前会话从推送目标中移除 |
-| `/huggingface help` | 显示 Hugging Face 帮助信息 |
-| `/huggingface search <关键词> [数量]` | 搜索 Hugging Face 论文（仅显示信息，数量可选，默认取配置值，最多 20） |
+| `/arxiv latest` | 获取已配置分类下的最新 ArXiv 论文 |
+| `/arxiv categories` | 列出所有支持的 ArXiv 学科分类 |
+| `/arxiv status` | 查看 ArXiv 配置与状态 |
+| `/arxiv add_session` | 将当前会话加入定时推送目标 |
+| `/arxiv remove_session` | 将当前会话移出定时推送目标 |
+| `/huggingface help` | 显示 Hugging Face 指令帮助 |
+| `/huggingface search <关键词> [数量]` | 搜索 Hugging Face 论文（仅显示基本信息，不下载 PDF） |
 | `/huggingface latest` | 获取 Hugging Face 每日论文 |
-| `/huggingface status` | 查看 Hugging Face 配置和状态 |
+| `/huggingface status` | 查看 Hugging Face 配置与状态 |
 
-> **提示：** 合并转发模式需平台支持（如 QQ），WebUI 内置聊天不支持显示合并转发消息，请关闭 `use_forward` 选项。
+> 合并转发模式依赖平台能力（如 QQ）。若当前平台不支持，请关闭 `use_forward`。
 
 ## 使用示例
 
-```
-# 搜索论文（快速，不下载 PDF）
+```text
+# ArXiv 快速搜索
 /arxiv search diffusion model
 /arxiv search attention transformer 5
 
-# 通过 ID 获取论文完整内容（含 PDF 截图）
+# 按 ID 获取单篇论文完整内容
 /arxiv get 2501.12345
 
-# 获取最新论文
+# 拉取最新论文
 /arxiv latest
+/huggingface latest
 ```
 
 ## 配置说明
 
-所有配置项都可以在 AstrBot WebUI 的插件管理面板中修改，分为多个配置组：
+可在 AstrBot WebUI 的插件管理面板中修改全部配置项。
 
-### ArXiv 论文配置
-
-| 配置项 | 类型 | 默认值 | 说明 |
-|--------|------|--------|------|
-| categories | list | `["cs.AI"]` | arXiv 学科分类代码列表 |
-| tags | list | `[]` | 关键词标签（模糊匹配） |
-| max_results | int | `1` | 每次推送/搜索的默认最大论文数 |
-| timeout_seconds | int | `30` | HTTP 请求超时 (秒) |
-
-### 发送配置
+### arxiv_config
 
 | 配置项 | 类型 | 默认值 | 说明 |
 |--------|------|--------|------|
-| push_time | string | `"09:00"` | 每日推送时间（HH:MM） |
-| push_timezone | string | `"Asia/Shanghai"` | 时区 |
-| target_sessions | list | `[]` | 目标 UMO 会话列表 |
-| use_forward | bool | `false` | 是否使用合并转发 |
-| bot_name | string | `"ArXiv Bot"` | 兼容旧配置的统一机器人名称（已不推荐） |
-| arxiv_bot_name | string | `"ArXiv Bot"` | ArXiv 合并转发显示昵称（优先于 `bot_name`） |
-| huggingface_bot_name | string | `"Hugging Face Bot"` | Hugging Face 合并转发显示昵称（优先于 `bot_name`） |
-| send_abstract | bool | `true` | 是否发送摘要 |
-| abstract_as_image | bool | `false` | 摘要是否渲染为图片 |
-| attach_pdf | bool | `true` | 是否附带 PDF 文件 |
-| screenshot_pdf | bool | `true` | 是否截图 PDF 首页 |
-| screenshot_dpi | int | `150` | 截图 DPI（72~300） |
-| max_pdf_size_mb | int | `20` | PDF 最大体积限制 (MB) |
-| history_retention_days | int | `30` | 定时推送去重记录保留天数 |
+| `categories` | list | `['cs.AI']` | ArXiv 学科分类代码列表 |
+| `tags` | list | `[]` | 关键词标签（模糊匹配） |
+| `max_results` | int | `1` | 每次推送/搜索的最大论文数量 |
+| `timeout_seconds` | int | `30` | HTTP 请求超时（秒） |
 
-### Hugging Face 论文配置
+### huggingface_config
 
 | 配置项 | 类型 | 默认值 | 说明 |
 |--------|------|--------|------|
-| max_results | int | `1` | 每次推送/搜索的默认最大论文数 |
-| timeout_seconds | int | `30` | HTTP 请求超时 (秒) |
+| `max_results` | int | `1` | 每次推送/搜索的最大论文数量 |
+| `timeout_seconds` | int | `30` | HTTP 请求超时（秒） |
 
-### LLM 赋能配置
+### network_config
 
 | 配置项 | 类型 | 默认值 | 说明 |
 |--------|------|--------|------|
-| abstract_mode | string | `"original"` | `original` 或 `llm_chinese` |
-| llm_summarize | bool | `false` | 是否使用 LLM 总结论文 |
-| llm_provider_id | string | `""` | LLM 提供商（WebUI 可视化选取） |
-| llm_summary_prompt | text | `""` | 自定义 LLM 总结 prompt（需包含 `{content}`；否则回退默认并告警） |
+| `proxy` | string | `""` | 全局代理地址（留空表示不使用） |
+
+### send_config
+
+| 配置项 | 类型 | 默认值 | 说明 |
+|--------|------|--------|------|
+| `push_time` | string | `"09:00"` | ArXiv 每日推送时间（HH:MM） |
+| `huggingface_push_time` | string | `"10:00"` | Hugging Face 每日推送时间（HH:MM） |
+| `push_timezone` | string | `"Asia/Shanghai"` | 推送时区 |
+| `target_sessions` | list | `[]` | 自动推送目标 UMO 会话列表 |
+| `use_forward` | bool | `false` | 是否使用合并转发发送 |
+| `bot_name` | string | `"ArXiv Bot"` | 统一机器人昵称（来源专属昵称未设置时回退使用） |
+| `arxiv_bot_name` | string | `"ArXiv Bot"` | ArXiv 来源显示昵称 |
+| `huggingface_bot_name` | string | `"Hugging Face Bot"` | Hugging Face 来源显示昵称 |
+| `send_abstract` | bool | `true` | 是否发送摘要 |
+| `abstract_as_image` | bool | `false` | 是否将摘要渲染为图片 |
+| `attach_pdf` | bool | `true` | 是否附带 PDF 文件 |
+| `screenshot_pdf` | bool | `true` | 是否截图 PDF 首页 |
+| `screenshot_dpi` | int | `150` | PDF 首页截图 DPI |
+| `max_pdf_size_mb` | int | `20` | PDF 最大体积限制（MB） |
+| `history_retention_days` | int | `30` | 已发送记录保留天数 |
+
+### llm_config
+
+| 配置项 | 类型 | 默认值 | 说明 |
+|--------|------|--------|------|
+| `abstract_mode` | string | `"original"` | 摘要处理方式：`original` / `llm_chinese` |
+| `llm_summarize` | bool | `false` | 是否启用 LLM 论文总结 |
+| `llm_provider_id` | string | `""` | LLM 提供商 ID（留空时使用当前对话默认提供商） |
+| `llm_summary_prompt` | text | `""` | 自定义总结 Prompt（需包含 `{content}`） |
 
 ## 依赖
 
-- `aiohttp` — 异步 HTTP 请求
-- `feedparser` — arXiv Atom XML 解析
-- `pymupdf` — PDF 文本提取和截图（软依赖，未安装时相关功能自动禁用）
-- `Pillow` — 摘要文本渲染为图片（软依赖）
+- `aiohttp`：异步 HTTP 请求
+- `feedparser`：ArXiv Atom XML 解析
+- `pymupdf`：PDF 文本提取与截图（软依赖）
+- `Pillow`：摘要图片渲染（软依赖）
 
 ## 许可证
 
