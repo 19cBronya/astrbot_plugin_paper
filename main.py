@@ -15,7 +15,15 @@ from astrbot.api.star import Context, Star, StarTools, register
 from astrbot.core.message.message_event_result import MessageEventResult
 from astrbot.core.star.filter.command import GreedyStr
 
-from . import arxiv_client, formatter, llm_service, pdf_handler, text_render, huggingface_client
+from . import (
+    arxiv_client,
+    formatter,
+    huggingface_client,
+    llm_service,
+    paper_cache,
+    pdf_handler,
+    text_render,
+)
 from .history import SentHistory
 
 # 默认 LLM 总结 prompt
@@ -60,6 +68,7 @@ class ArxivPlugin(Star):
         self._data_dir: Path = Path()
         self._temp_dir: Path = Path()
         self._history: SentHistory | None = None
+        self._cache: paper_cache.PaperCache | None = None
         self._cron_job_id: str = ""
         self._huggingface_cron_job_id: str = ""
 
@@ -188,11 +197,71 @@ class ArxivPlugin(Star):
 
         return best or candidates[0]
 
+    @staticmethod
+    def _make_arxiv_cache_key(paper: arxiv_client.ArxivPaper) -> str:
+        return f"arxiv:{paper.arxiv_id}"
+
+    @staticmethod
+    def _make_hf_cache_key(paper: huggingface_client.HuggingFacePaper) -> str:
+        return f"huggingface:{paper.id}"
+
+    @staticmethod
+    def _build_arxiv_paper_info(paper: arxiv_client.ArxivPaper) -> dict[str, object]:
+        return {
+            "source": _SOURCE_ARXIV,
+            "paper_id": paper.arxiv_id,
+            "title": paper.title,
+            "published": paper.published,
+            "updated": paper.updated,
+            "pdf_url": paper.pdf_url,
+            "abs_url": paper.abs_url,
+        }
+
+    @staticmethod
+    def _build_hf_paper_info(paper: huggingface_client.HuggingFacePaper) -> dict[str, object]:
+        return {
+            "source": _SOURCE_HUGGINGFACE,
+            "paper_id": paper.id,
+            "title": paper.title,
+            "published": paper.publishedAt,
+            "project_page": paper.projectPage,
+            "abs_url": paper.abs_url,
+        }
+
+    @staticmethod
+    def _serialize_arxiv_paper(paper: arxiv_client.ArxivPaper) -> dict[str, object]:
+        return {
+            "arxiv_id": paper.arxiv_id,
+            "title": paper.title,
+            "authors": list(paper.authors),
+            "abstract": paper.abstract,
+            "categories": list(paper.categories),
+            "published": paper.published,
+            "updated": paper.updated,
+            "pdf_url": paper.pdf_url,
+            "abs_url": paper.abs_url,
+        }
+
+    @staticmethod
+    def _deserialize_arxiv_paper(payload: dict[str, object]) -> arxiv_client.ArxivPaper:
+        return arxiv_client.ArxivPaper(
+            arxiv_id=str(payload.get("arxiv_id", "")),
+            title=str(payload.get("title", "")),
+            authors=[str(x) for x in list(payload.get("authors", []) or [])],
+            abstract=str(payload.get("abstract", "")),
+            categories=[str(x) for x in list(payload.get("categories", []) or [])],
+            published=str(payload.get("published", "")),
+            updated=str(payload.get("updated", "")),
+            pdf_url=str(payload.get("pdf_url", "")),
+            abs_url=str(payload.get("abs_url", "")),
+        )
+
     async def _process_hf_html_analysis(
         self,
         paper: huggingface_client.HuggingFacePaper,
         *,
         index: int,
+        paper_key: str,
         warnings: list[str],
     ) -> list[MessageChain]:
         """第三次尝试：直接分析项目页 HTML 文本（不截图/不附件）。"""
@@ -207,47 +276,100 @@ class ArxivPlugin(Star):
             abstract_mode = self._llm_cfg.get("abstract_mode", "original")
             if abstract_mode == "llm_chinese" and paper.summary:
                 provider_id = self._llm_cfg.get("llm_provider_id", "")
-                abstract_text = await llm_service.translate_abstract(
-                    self.context,
-                    paper.summary,
-                    provider_id=provider_id,
-                )
+                cached = None
+                if self._cache:
+                    cached = self._cache.get_cached_translation(
+                        paper_key,
+                        abstract=paper.summary,
+                        provider_id=provider_id,
+                    )
+                if cached:
+                    abstract_text = cached
+                else:
+                    abstract_text = await llm_service.translate_abstract(
+                        self.context,
+                        paper.summary,
+                        provider_id=provider_id,
+                    )
+                    if self._cache and abstract_text and abstract_text != paper.summary:
+                        self._cache.store_translation(
+                            paper_key,
+                            abstract=paper.summary,
+                            provider_id=provider_id,
+                            translated=abstract_text,
+                        )
             else:
                 abstract_text = paper.summary
 
         if self._llm_cfg.get("llm_summarize", False):
             html_url = (paper.projectPage or paper.abs_url or "").strip()
             if html_url:
-                html_text = await pdf_handler.extract_text_from_webpage(
-                    html_url,
-                    timeout=timeout,
-                    proxy=self._proxy,
-                    max_chars=30000,
-                )
-                if html_text:
-                    provider_id = self._llm_cfg.get("llm_provider_id", "")
-                    custom_prompt, prompt_warning = self._resolve_summary_prompt()
-                    if prompt_warning:
-                        warnings.append(prompt_warning)
-                    summary_text = await llm_service.summarize_paper(
-                        self.context,
-                        html_text,
+                provider_id = self._llm_cfg.get("llm_provider_id", "")
+                custom_prompt, prompt_warning = self._resolve_summary_prompt()
+                if prompt_warning:
+                    warnings.append(prompt_warning)
+                source_fingerprint = f"html:{html_url}"
+                cached_summary = None
+                if self._cache:
+                    cached_summary = self._cache.get_cached_summary(
+                        paper_key,
+                        source_fingerprint=source_fingerprint,
                         provider_id=provider_id,
-                        custom_prompt=custom_prompt,
+                        prompt=custom_prompt,
                     )
+                if cached_summary:
+                    summary_text = cached_summary
                 else:
-                    warnings.append("未能从网页提取正文文本，无法执行 LLM 总结。")
+                    html_text = await pdf_handler.extract_text_from_webpage(
+                        html_url,
+                        timeout=timeout,
+                        proxy=self._proxy,
+                        max_chars=30000,
+                    )
+                    if html_text:
+                        summary_text = await llm_service.summarize_paper(
+                            self.context,
+                            html_text,
+                            provider_id=provider_id,
+                            custom_prompt=custom_prompt,
+                        )
+                        if self._cache and summary_text:
+                            self._cache.store_summary(
+                                paper_key,
+                                source_fingerprint=source_fingerprint,
+                                provider_id=provider_id,
+                                prompt=custom_prompt,
+                                summary=summary_text,
+                            )
+                    else:
+                        warnings.append("未能从网页提取正文文本，无法执行 LLM 总结。")
             else:
                 warnings.append("缺少可访问网页链接，无法执行 HTML 内容分析。")
 
         abstract_image_path = ""
         use_abstract_image = self._send_cfg.get("abstract_as_image", True)
         if send_abstract and abstract_text and use_abstract_image:
-            img_name = f"abstract_hf_{paper.id.replace('/', '_')}.png"
-            img_path = self._temp_dir / img_name
-            rendered = text_render.render_abstract_image(abstract_text, img_path)
-            if rendered:
-                abstract_image_path = str(rendered)
+            if self._cache:
+                cached_img = self._cache.get_cached_abstract_image(
+                    paper_key,
+                    abstract_text=abstract_text,
+                )
+                if cached_img:
+                    abstract_image_path = str(cached_img)
+            if not abstract_image_path:
+                img_name = f"abstract_hf_{paper.id.replace('/', '_')}.png"
+                img_path = self._temp_dir / img_name
+                rendered = text_render.render_abstract_image(abstract_text, img_path)
+                if rendered:
+                    if self._cache:
+                        cached_img = self._cache.store_abstract_image(
+                            paper_key,
+                            abstract_text=abstract_text,
+                            source_path=rendered,
+                        )
+                        abstract_image_path = str(cached_img or rendered)
+                    else:
+                        abstract_image_path = str(rendered)
 
         return formatter.build_paper_chains(
             paper,
@@ -275,17 +397,35 @@ class ArxivPlugin(Star):
         """
         timeout = self._huggingface_cfg.get("timeout_seconds", 30)
         warnings: list[str] = []
+        paper_key = self._make_hf_cache_key(paper)
+        linked_arxiv_id = ""
+        if self._cache:
+            self._cache.touch_paper_info(paper_key, self._build_hf_paper_info(paper))
+            linked_arxiv_id = self._cache.get_linked_arxiv_id(paper_key) or ""
 
         arxiv_id = self._extract_arxiv_id_from_hf(paper)
+        if not arxiv_id and linked_arxiv_id:
+            arxiv_id = linked_arxiv_id
+            logger.info("[%s] 使用缓存的 arXiv 关联 ID: %s", paper.id, arxiv_id)
+
         if arxiv_id:
             logger.info("[%s] 尝试 1/3: 按 arXiv ID 获取: %s", paper.id, arxiv_id)
             try:
-                arxiv_paper = await arxiv_client.get_paper_by_id(
-                    arxiv_id,
-                    timeout=timeout,
-                    proxy=self._proxy,
-                )
+                arxiv_paper = None
+                if self._cache:
+                    cached_payload = self._cache.get_arxiv_payload(f"arxiv:{arxiv_id}")
+                    if cached_payload:
+                        arxiv_paper = self._deserialize_arxiv_paper(cached_payload)
+                        logger.info("[%s] 命中缓存的 arXiv 论文快照。", paper.id)
+                if not arxiv_paper:
+                    arxiv_paper = await arxiv_client.get_paper_by_id(
+                        arxiv_id,
+                        timeout=timeout,
+                        proxy=self._proxy,
+                    )
                 if arxiv_paper:
+                    if self._cache:
+                        self._cache.store_linked_arxiv_id(paper_key, arxiv_paper.arxiv_id)
                     return await self._process_single_paper(arxiv_paper, index=index)
                 logger.warning("[%s] 尝试 1/3 失败：未找到 arXiv ID=%s", paper.id, arxiv_id)
             except Exception:
@@ -308,6 +448,8 @@ class ArxivPlugin(Star):
         matched = self._pick_arxiv_candidate_by_title(paper.title, candidates)
         if matched:
             logger.info("[%s] 标题检索匹配到 arXiv: %s", paper.id, matched.arxiv_id)
+            if self._cache:
+                self._cache.store_linked_arxiv_id(paper_key, matched.arxiv_id)
             return await self._process_single_paper(matched, index=index)
 
         warnings.append("未在 arXiv 中匹配到同名论文，已回退到 HTML 内容分析。")
@@ -317,6 +459,7 @@ class ArxivPlugin(Star):
         return await self._process_hf_html_analysis(
             paper,
             index=index,
+            paper_key=paper_key,
             warnings=warnings,
         )
 
@@ -374,11 +517,16 @@ class ArxivPlugin(Star):
         # 初始化已发送历史
         retention = self._send_cfg.get("history_retention_days", 30)
         self._history = SentHistory(self._data_dir, retention_days=retention)
+        self._cache = paper_cache.PaperCache(self._data_dir, retention_days=retention)
 
         # 清理过期记录
         removed = self._history.cleanup_old()
         if removed > 0:
             logger.info("已清理 %d 条过期的论文发送记录。", removed)
+        if self._cache:
+            removed_cache = self._cache.cleanup_old()
+            if removed_cache > 0:
+                logger.info("已清理 %d 条过期的论文处理缓存记录。", removed_cache)
 
         # 注册定时任务
         await self._register_cron_job()
@@ -647,22 +795,46 @@ class ArxivPlugin(Star):
         screenshot_path = ""
         pdf_path_str = ""
         warnings: list[str] = []
+        paper_key = self._make_arxiv_cache_key(paper)
+        if self._cache:
+            self._cache.touch_paper_info(paper_key, self._build_arxiv_paper_info(paper))
+            self._cache.store_arxiv_payload(paper_key, self._serialize_arxiv_paper(paper))
 
         timeout = self._arxiv_cfg.get("timeout_seconds", 30)
         max_pdf_size = self._send_cfg.get("max_pdf_size_mb", 20)
+        send_abstract = self._send_cfg.get("send_abstract", True)
 
         # 摘要处理
-        if self._send_cfg.get("send_abstract", True):
+        if send_abstract:
             abstract_mode = self._llm_cfg.get("abstract_mode", "original")
             if abstract_mode == "llm_chinese" and paper.abstract:
                 provider_id = self._llm_cfg.get("llm_provider_id", "")
-                logger.info("[%s] 使用 LLM 翻译摘要...", paper.arxiv_id)
-                abstract_text = await llm_service.translate_abstract(
-                    self.context,
-                    paper.abstract,
-                    provider_id=provider_id,
-                )
-                logger.info("[%s] 摘要翻译完成。", paper.arxiv_id)
+                cached_translation = None
+                if self._cache:
+                    cached_translation = self._cache.get_cached_translation(
+                        paper_key,
+                        abstract=paper.abstract,
+                        provider_id=provider_id,
+                    )
+
+                if cached_translation:
+                    abstract_text = cached_translation
+                    logger.info("[%s] 摘要翻译命中缓存。", paper.arxiv_id)
+                else:
+                    logger.info("[%s] 使用 LLM 翻译摘要...", paper.arxiv_id)
+                    abstract_text = await llm_service.translate_abstract(
+                        self.context,
+                        paper.abstract,
+                        provider_id=provider_id,
+                    )
+                    logger.info("[%s] 摘要翻译完成。", paper.arxiv_id)
+                    if self._cache and abstract_text and abstract_text != paper.abstract:
+                        self._cache.store_translation(
+                            paper_key,
+                            abstract=paper.abstract,
+                            provider_id=provider_id,
+                            translated=abstract_text,
+                        )
             else:
                 abstract_text = paper.abstract
 
@@ -675,68 +847,140 @@ class ArxivPlugin(Star):
 
         downloaded_pdf: Path | None = None
         if need_pdf and paper.pdf_url:
-            logger.info("[%s] 下载 PDF: %s", paper.arxiv_id, paper.pdf_url)
-            downloaded_pdf = await pdf_handler.download_pdf(
-                paper.pdf_url,
-                self._temp_dir,
-                timeout=timeout,
-                max_size_mb=max_pdf_size,
-                proxy=self._proxy,
-            )
-            if downloaded_pdf:
-                logger.info("[%s] PDF 下载成功: %s", paper.arxiv_id, downloaded_pdf)
-            else:
-                logger.warning("[%s] PDF 下载失败。", paper.arxiv_id)
+            if self._cache:
+                downloaded_pdf = self._cache.get_cached_pdf(
+                    paper_key,
+                    pdf_url=paper.pdf_url,
+                )
+                if downloaded_pdf:
+                    logger.info("[%s] PDF 命中缓存: %s", paper.arxiv_id, downloaded_pdf)
+            if not downloaded_pdf:
+                logger.info("[%s] 下载 PDF: %s", paper.arxiv_id, paper.pdf_url)
+                downloaded_pdf = await pdf_handler.download_pdf(
+                    paper.pdf_url,
+                    self._temp_dir,
+                    timeout=timeout,
+                    max_size_mb=max_pdf_size,
+                    proxy=self._proxy,
+                )
+                if downloaded_pdf:
+                    if self._cache:
+                        cached_pdf = self._cache.store_pdf(
+                            paper_key,
+                            pdf_url=paper.pdf_url,
+                            source_path=downloaded_pdf,
+                        )
+                        downloaded_pdf = cached_pdf or downloaded_pdf
+                    logger.info("[%s] PDF 下载成功: %s", paper.arxiv_id, downloaded_pdf)
+                else:
+                    logger.warning("[%s] PDF 下载失败。", paper.arxiv_id)
+        elif need_pdf and not paper.pdf_url:
+            logger.warning("[%s] 缺少 PDF 链接，无法下载。", paper.arxiv_id)
 
         # PDF 首页截图
+        dpi = self._send_cfg.get("screenshot_dpi", 150)
         if downloaded_pdf and self._send_cfg.get("screenshot_pdf", True):
-            dpi = self._send_cfg.get("screenshot_dpi", 150)
-            screenshot = pdf_handler.screenshot_first_page(
-                downloaded_pdf,
-                self._temp_dir,
-                dpi=dpi,
-            )
-            if screenshot:
-                screenshot_path = str(screenshot)
-                logger.info("[%s] PDF 首页截图成功。", paper.arxiv_id)
-            else:
-                logger.warning("[%s] PDF 首页截图失败。", paper.arxiv_id)
+            if self._cache:
+                cached_screenshot = self._cache.get_cached_screenshot(
+                    paper_key,
+                    dpi=dpi,
+                    source_fingerprint=paper.pdf_url or paper.arxiv_id,
+                )
+                if cached_screenshot:
+                    screenshot_path = str(cached_screenshot)
+                    logger.info("[%s] PDF 首页截图命中缓存。", paper.arxiv_id)
+            if not screenshot_path:
+                screenshot = pdf_handler.screenshot_first_page(
+                    downloaded_pdf,
+                    self._temp_dir,
+                    dpi=dpi,
+                )
+                if screenshot:
+                    if self._cache:
+                        cached_shot = self._cache.store_screenshot(
+                            paper_key,
+                            dpi=dpi,
+                            source_path=screenshot,
+                            source_fingerprint=paper.pdf_url or paper.arxiv_id,
+                        )
+                        screenshot_path = str(cached_shot or screenshot)
+                    else:
+                        screenshot_path = str(screenshot)
+                    logger.info("[%s] PDF 首页截图成功。", paper.arxiv_id)
+                else:
+                    logger.warning("[%s] PDF 首页截图失败。", paper.arxiv_id)
 
         # LLM 总结
         if downloaded_pdf and self._llm_cfg.get("llm_summarize", False):
-            pdf_text = pdf_handler.extract_text(downloaded_pdf)
-            if pdf_text:
-                provider_id = self._llm_cfg.get("llm_provider_id", "")
-                custom_prompt, prompt_warning = self._resolve_summary_prompt()
-                if prompt_warning:
-                    warnings.append(prompt_warning)
-                summary_text = await llm_service.summarize_paper(
-                    self.context,
-                    pdf_text,
+            provider_id = self._llm_cfg.get("llm_provider_id", "")
+            custom_prompt, prompt_warning = self._resolve_summary_prompt()
+            if prompt_warning:
+                warnings.append(prompt_warning)
+            source_fingerprint = f"pdf:{paper.pdf_url or paper.arxiv_id}"
+            cached_summary = None
+            if self._cache:
+                cached_summary = self._cache.get_cached_summary(
+                    paper_key,
+                    source_fingerprint=source_fingerprint,
                     provider_id=provider_id,
-                    custom_prompt=custom_prompt,
+                    prompt=custom_prompt,
                 )
+            if cached_summary:
+                summary_text = cached_summary
+                logger.info("[%s] LLM 总结命中缓存。", paper.arxiv_id)
+            else:
+                pdf_text = pdf_handler.extract_text(downloaded_pdf)
+                if pdf_text:
+                    summary_text = await llm_service.summarize_paper(
+                        self.context,
+                        pdf_text,
+                        provider_id=provider_id,
+                        custom_prompt=custom_prompt,
+                    )
+                    if self._cache and summary_text:
+                        self._cache.store_summary(
+                            paper_key,
+                            source_fingerprint=source_fingerprint,
+                            provider_id=provider_id,
+                            prompt=custom_prompt,
+                            summary=summary_text,
+                        )
 
         # 摘要渲染为图片（或文本）
         abstract_image_path = ""
         use_abstract_image = self._send_cfg.get("abstract_as_image", True)
-        send_abstract = self._send_cfg.get("send_abstract", True)
-
         if send_abstract and abstract_text and use_abstract_image:
-            logger.info("[%s] 渲染摘要为图片...", paper.arxiv_id)
-            img_name = f"abstract_{paper.arxiv_id.replace('/', '_')}.png"
-            img_path = self._temp_dir / img_name
-            rendered = text_render.render_abstract_image(
-                abstract_text,
-                img_path,
-            )
-            if rendered:
-                abstract_image_path = str(rendered)
-                logger.info("[%s] 摘要图片渲染成功: %s", paper.arxiv_id, rendered)
-            else:
-                logger.warning(
-                    "[%s] 摘要图片渲染失败，将以文本形式发送。", paper.arxiv_id
+            if self._cache:
+                cached_img = self._cache.get_cached_abstract_image(
+                    paper_key,
+                    abstract_text=abstract_text,
                 )
+                if cached_img:
+                    abstract_image_path = str(cached_img)
+                    logger.info("[%s] 摘要图片命中缓存。", paper.arxiv_id)
+            if not abstract_image_path:
+                logger.info("[%s] 渲染摘要为图片...", paper.arxiv_id)
+                img_name = f"abstract_{paper.arxiv_id.replace('/', '_')}.png"
+                img_path = self._temp_dir / img_name
+                rendered = text_render.render_abstract_image(
+                    abstract_text,
+                    img_path,
+                )
+                if rendered:
+                    if self._cache:
+                        cached_img = self._cache.store_abstract_image(
+                            paper_key,
+                            abstract_text=abstract_text,
+                            source_path=rendered,
+                        )
+                        abstract_image_path = str(cached_img or rendered)
+                    else:
+                        abstract_image_path = str(rendered)
+                    logger.info("[%s] 摘要图片渲染成功: %s", paper.arxiv_id, abstract_image_path)
+                else:
+                    logger.warning(
+                        "[%s] 摘要图片渲染失败，将以文本形式发送。", paper.arxiv_id
+                    )
 
         # PDF 附件
         if downloaded_pdf and self._send_cfg.get("attach_pdf", False):
@@ -886,12 +1130,20 @@ class ArxivPlugin(Star):
 
         yield event.plain_result(f"🔍 正在获取论文 {arxiv_id}，请稍候...")
 
+        paper: arxiv_client.ArxivPaper | None = None
+        if self._cache:
+            cached_payload = self._cache.get_arxiv_payload(f"arxiv:{arxiv_id}")
+            if cached_payload:
+                paper = self._deserialize_arxiv_paper(cached_payload)
+                logger.info("get 请求命中缓存论文快照: %s", arxiv_id)
+
         try:
-            paper = await arxiv_client.get_paper_by_id(
-                arxiv_id,
-                timeout=timeout,
-                proxy=self._proxy,
-            )
+            if not paper:
+                paper = await arxiv_client.get_paper_by_id(
+                    arxiv_id,
+                    timeout=timeout,
+                    proxy=self._proxy,
+                )
         except Exception:
             logger.exception("获取论文 '%s' 失败。", arxiv_id)
             yield event.plain_result("❌ 获取论文失败，请检查 ID 是否正确后重试。")
