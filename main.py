@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from astrbot.api import AstrBotConfig, logger
@@ -135,6 +136,189 @@ class ArxivPlugin(Star):
         )
         logger.warning(warning)
         return _DEFAULT_SUMMARY_PROMPT, warning
+
+    @staticmethod
+    def _extract_arxiv_id_from_hf(paper: huggingface_client.HuggingFacePaper) -> str:
+        """从 Hugging Face 论文条目中提取可用于 arXiv 查询的 ID。"""
+        raw_id = (paper.id or "").strip()
+        if not raw_id:
+            return ""
+
+        raw_id = raw_id.replace("arxiv:", "")
+        if "v" in raw_id:
+            base, suffix = raw_id.rsplit("v", 1)
+            if suffix.isdigit():
+                raw_id = base
+
+        return raw_id.strip()
+
+    @staticmethod
+    def _normalize_title_for_match(title: str) -> str:
+        title = (title or "").lower()
+        title = re.sub(r"[^a-z0-9\s]", " ", title)
+        return " ".join(title.split())
+
+    def _pick_arxiv_candidate_by_title(
+        self,
+        hf_title: str,
+        candidates: list[arxiv_client.ArxivPaper],
+    ) -> arxiv_client.ArxivPaper | None:
+        if not candidates:
+            return None
+
+        target = self._normalize_title_for_match(hf_title)
+        if not target:
+            return candidates[0]
+
+        for paper in candidates:
+            if self._normalize_title_for_match(paper.title) == target:
+                return paper
+
+        target_tokens = set(target.split())
+        best: arxiv_client.ArxivPaper | None = None
+        best_score = 0
+        for paper in candidates:
+            cand_tokens = set(self._normalize_title_for_match(paper.title).split())
+            if not cand_tokens:
+                continue
+            score = len(target_tokens & cand_tokens)
+            if score > best_score:
+                best_score = score
+                best = paper
+
+        return best or candidates[0]
+
+    async def _process_hf_html_analysis(
+        self,
+        paper: huggingface_client.HuggingFacePaper,
+        *,
+        index: int,
+        warnings: list[str],
+    ) -> list[MessageChain]:
+        """第三次尝试：直接分析项目页 HTML 文本（不截图/不附件）。"""
+        logger.info("[%s] 进入 HTML 内容分析回退。", paper.id)
+
+        timeout = self._huggingface_cfg.get("timeout_seconds", 30)
+        abstract_text = ""
+        summary_text = ""
+
+        send_abstract = self._send_cfg.get("send_abstract", True)
+        if send_abstract:
+            abstract_mode = self._llm_cfg.get("abstract_mode", "original")
+            if abstract_mode == "llm_chinese" and paper.summary:
+                provider_id = self._llm_cfg.get("llm_provider_id", "")
+                abstract_text = await llm_service.translate_abstract(
+                    self.context,
+                    paper.summary,
+                    provider_id=provider_id,
+                )
+            else:
+                abstract_text = paper.summary
+
+        if self._llm_cfg.get("llm_summarize", False):
+            html_url = (paper.projectPage or paper.abs_url or "").strip()
+            if html_url:
+                html_text = await pdf_handler.extract_text_from_webpage(
+                    html_url,
+                    timeout=timeout,
+                    proxy=self._proxy,
+                    max_chars=30000,
+                )
+                if html_text:
+                    provider_id = self._llm_cfg.get("llm_provider_id", "")
+                    custom_prompt, prompt_warning = self._resolve_summary_prompt()
+                    if prompt_warning:
+                        warnings.append(prompt_warning)
+                    summary_text = await llm_service.summarize_paper(
+                        self.context,
+                        html_text,
+                        provider_id=provider_id,
+                        custom_prompt=custom_prompt,
+                    )
+                else:
+                    warnings.append("未能从网页提取正文文本，无法执行 LLM 总结。")
+            else:
+                warnings.append("缺少可访问网页链接，无法执行 HTML 内容分析。")
+
+        abstract_image_path = ""
+        use_abstract_image = self._send_cfg.get("abstract_as_image", True)
+        if send_abstract and abstract_text and use_abstract_image:
+            img_name = f"abstract_hf_{paper.id.replace('/', '_')}.png"
+            img_path = self._temp_dir / img_name
+            rendered = text_render.render_abstract_image(abstract_text, img_path)
+            if rendered:
+                abstract_image_path = str(rendered)
+
+        return formatter.build_paper_chains(
+            paper,
+            index=index,
+            show_abstract=send_abstract,
+            abstract_text=abstract_text,
+            summary_text=summary_text,
+            screenshot_path="",
+            pdf_path="",
+            abstract_image_path=abstract_image_path,
+            warnings=warnings,
+        )
+
+    async def _process_single_huggingface_paper(
+        self,
+        paper: huggingface_client.HuggingFacePaper,
+        *,
+        index: int = 0,
+    ) -> list[MessageChain]:
+        """处理单篇 Hugging Face 论文：三次尝试。
+
+        1) 提取 arXiv ID 后按 ID 拉取；
+        2) 用标题在 arXiv 搜索并匹配；
+        3) 直接分析 HTML 文本（不截图）。
+        """
+        timeout = self._huggingface_cfg.get("timeout_seconds", 30)
+        warnings: list[str] = []
+
+        arxiv_id = self._extract_arxiv_id_from_hf(paper)
+        if arxiv_id:
+            logger.info("[%s] 尝试 1/3: 按 arXiv ID 获取: %s", paper.id, arxiv_id)
+            try:
+                arxiv_paper = await arxiv_client.get_paper_by_id(
+                    arxiv_id,
+                    timeout=timeout,
+                    proxy=self._proxy,
+                )
+                if arxiv_paper:
+                    return await self._process_single_paper(arxiv_paper, index=index)
+                logger.warning("[%s] 尝试 1/3 失败：未找到 arXiv ID=%s", paper.id, arxiv_id)
+            except Exception:
+                logger.exception("[%s] 尝试 1/3 异常：按 arXiv ID 查询失败。", paper.id)
+        else:
+            logger.warning("[%s] 尝试 1/3 跳过：无法从 HF 条目提取 arXiv ID", paper.id)
+
+        logger.info("[%s] 尝试 2/3: 使用标题检索 arXiv", paper.id)
+        try:
+            candidates = await arxiv_client.search_papers(
+                paper.title,
+                max_results=5,
+                timeout=timeout,
+                proxy=self._proxy,
+            )
+        except Exception:
+            logger.exception("[%s] 尝试 2/3 异常：标题检索 arXiv 失败。", paper.id)
+            candidates = []
+
+        matched = self._pick_arxiv_candidate_by_title(paper.title, candidates)
+        if matched:
+            logger.info("[%s] 标题检索匹配到 arXiv: %s", paper.id, matched.arxiv_id)
+            return await self._process_single_paper(matched, index=index)
+
+        warnings.append("未在 arXiv 中匹配到同名论文，已回退到 HTML 内容分析。")
+        logger.warning("[%s] 尝试 2/3 失败：标题检索未命中。", paper.id)
+
+        logger.info("[%s] 尝试 3/3: HTML 内容分析（不截图）", paper.id)
+        return await self._process_hf_html_analysis(
+            paper,
+            index=index,
+            warnings=warnings,
+        )
 
     def _build_output_chains(
         self,
@@ -555,180 +739,6 @@ class ArxivPlugin(Star):
                 )
 
         # PDF 附件
-        if downloaded_pdf and self._send_cfg.get("attach_pdf", False):
-            pdf_path_str = str(downloaded_pdf)
-
-        return formatter.build_paper_chains(
-            paper,
-            index=index,
-            show_abstract=send_abstract,
-            abstract_text=abstract_text,
-            summary_text=summary_text,
-            screenshot_path=screenshot_path,
-            pdf_path=pdf_path_str,
-            abstract_image_path=abstract_image_path,
-            warnings=warnings,
-        )
-
-    async def _process_single_huggingface_paper(
-        self,
-        paper: huggingface_client.HuggingFacePaper,
-        *,
-        index: int = 0,
-    ) -> list[MessageChain]:
-        """处理单篇 Hugging Face 论文：翻译摘要、下载 PDF、截图、总结、渲染摘要图片。"""
-        logger.info("[%s] 开始处理: %s", paper.id, paper.title)
-        abstract_text = ""
-        summary_text = ""
-        screenshot_path = ""
-        warnings: list[str] = []
-
-        timeout = self._huggingface_cfg.get("timeout_seconds", 30)
-        max_pdf_size = self._send_cfg.get("max_pdf_size_mb", 20)
-
-        # 摘要处理
-        if self._send_cfg.get("send_abstract", True):
-            abstract_mode = self._llm_cfg.get("abstract_mode", "original")
-            if abstract_mode == "llm_chinese" and paper.summary:
-                provider_id = self._llm_cfg.get("llm_provider_id", "")
-                logger.info("[%s] 使用 LLM 翻译摘要...", paper.id)
-                abstract_text = await llm_service.translate_abstract(
-                    self.context,
-                    paper.summary,
-                    provider_id=provider_id,
-                )
-                logger.info("[%s] 摘要翻译完成。", paper.id)
-            else:
-                abstract_text = paper.summary
-
-        # 是否需要下载 PDF（截图、附件、LLM 总结都需要 PDF）
-        need_pdf = (
-            self._send_cfg.get("screenshot_pdf", True)
-            or self._send_cfg.get("attach_pdf", False)
-            or self._llm_cfg.get("llm_summarize", False)
-        )
-
-        downloaded_pdf: Path | None = None
-        pdf_url = paper.pdf_url or paper.projectPage
-        if need_pdf and pdf_url:
-            logger.info("[%s] 下载 PDF: %s", paper.id, pdf_url)
-            downloaded_pdf = await pdf_handler.download_pdf(
-                pdf_url,
-                self._temp_dir,
-                timeout=timeout,
-                max_size_mb=max_pdf_size,
-                proxy=self._proxy,
-            )
-            if downloaded_pdf:
-                logger.info("[%s] PDF 下载成功: %s", paper.id, downloaded_pdf)
-            else:
-                logger.warning("[%s] PDF 下载失败。", paper.id)
-                if paper.projectPage:
-                    logger.info("[%s] 尝试从项目页面解析 PDF 链接...", paper.id)
-                    resolved_pdf_url = await pdf_handler.resolve_pdf_url_from_webpage(
-                        paper.projectPage,
-                        timeout=timeout,
-                        proxy=self._proxy,
-                    )
-                    if resolved_pdf_url:
-                        logger.info(
-                            "[%s] 解析到 PDF 链接: %s",
-                            paper.id,
-                            resolved_pdf_url,
-                        )
-                        downloaded_pdf = await pdf_handler.download_pdf(
-                            resolved_pdf_url,
-                            self._temp_dir,
-                            timeout=timeout,
-                            max_size_mb=max_pdf_size,
-                            proxy=self._proxy,
-                        )
-                        if downloaded_pdf:
-                            logger.info(
-                                "[%s] PDF 下载成功: %s",
-                                paper.id,
-                                downloaded_pdf,
-                            )
-                        else:
-                            logger.warning(
-                                "[%s] 从解析链接下载 PDF 仍然失败。",
-                                paper.id,
-                            )
-                    else:
-                        logger.warning(
-                            "[%s] 未能从项目页面解析到 PDF 链接。",
-                            paper.id,
-                        )
-
-        # PDF 首页截图
-        if downloaded_pdf and self._send_cfg.get("screenshot_pdf", True):
-            dpi = self._send_cfg.get("screenshot_dpi", 150)
-            screenshot = pdf_handler.screenshot_first_page(
-                downloaded_pdf,
-                self._temp_dir,
-                dpi=dpi,
-            )
-            if screenshot:
-                screenshot_path = str(screenshot)
-                logger.info("[%s] PDF 首页截图成功。", paper.id)
-            else:
-                logger.warning("[%s] PDF 首页截图失败。", paper.id)
-        elif self._send_cfg.get("screenshot_pdf", True):
-            fallback_url = (paper.projectPage or paper.pdf_url or "").strip()
-            if fallback_url:
-                logger.info("[%s] 未获取到 PDF，回退为网页截图: %s", paper.id, fallback_url)
-                webpage_screenshot, screenshot_error = await pdf_handler.screenshot_webpage(
-                    fallback_url,
-                    self._temp_dir,
-                    timeout=timeout,
-                    proxy=self._proxy,
-                )
-                if webpage_screenshot:
-                    screenshot_path = str(webpage_screenshot)
-                    logger.info("[%s] 网页截图成功。", paper.id)
-                elif screenshot_error:
-                    warnings.append(screenshot_error)
-            else:
-                warnings.append("网页截图失败：未找到可用的页面链接。")
-
-        # LLM 总结
-        if downloaded_pdf and self._llm_cfg.get("llm_summarize", False):
-            pdf_text = pdf_handler.extract_text(downloaded_pdf)
-            if pdf_text:
-                provider_id = self._llm_cfg.get("llm_provider_id", "")
-                custom_prompt, prompt_warning = self._resolve_summary_prompt()
-                if prompt_warning:
-                    warnings.append(prompt_warning)
-                summary_text = await llm_service.summarize_paper(
-                    self.context,
-                    pdf_text,
-                    provider_id=provider_id,
-                    custom_prompt=custom_prompt,
-                )
-
-        # 摘要渲染为图片（或文本）
-        abstract_image_path = ""
-        use_abstract_image = self._send_cfg.get("abstract_as_image", True)
-        send_abstract = self._send_cfg.get("send_abstract", True)
-
-        if send_abstract and abstract_text and use_abstract_image:
-            logger.info("[%s] 渲染摘要为图片...", paper.id)
-            img_name = f"abstract_{paper.id.replace('/', '_')}.png"
-            img_path = self._temp_dir / img_name
-            rendered = text_render.render_abstract_image(
-                abstract_text,
-                img_path,
-            )
-            if rendered:
-                abstract_image_path = str(rendered)
-                logger.info("[%s] 摘要图片渲染成功: %s", paper.id, rendered)
-            else:
-                logger.warning(
-                    "[%s] 摘要图片渲染失败，将以文本形式发送。", paper.id
-                )
-
-        # PDF 附件
-        pdf_path_str = ""
         if downloaded_pdf and self._send_cfg.get("attach_pdf", False):
             pdf_path_str = str(downloaded_pdf)
 

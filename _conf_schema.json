@@ -7,7 +7,9 @@
         "description": "学科分类代码列表",
         "type": "list",
         "hint": "arXiv 学科分类，如 cs.AI, cs.LG, math.CO。使用 /arxiv categories 查看所有可用分类。",
-        "default": ["cs.AI"]
+        "default": [
+          "cs.AI"
+        ]
       },
       "tags": {
         "description": "关键词标签（模糊匹配）",
@@ -40,18 +42,6 @@
         "description": "HTTP 请求超时 (秒)",
         "type": "int",
         "default": 30
-      },
-      "auto_install_playwright_browser": {
-        "description": "自动安装 Playwright 浏览器",
-        "type": "bool",
-        "hint": "仅在网页截图检测到浏览器缺失时生效。开启后将尝试执行 playwright install。",
-        "default": false
-      },
-      "playwright_install_timeout_seconds": {
-        "description": "Playwright 安装超时 (秒)",
-        "type": "int",
-        "hint": "自动安装 Playwright 浏览器的超时时间。仅在 auto_install_playwright_browser 开启时生效。",
-        "default": 180
       }
     }
   },
@@ -164,7 +154,10 @@
       "abstract_mode": {
         "description": "摘要处理方式",
         "type": "string",
-        "options": ["original", "llm_chinese"],
+        "options": [
+          "original",
+          "llm_chinese"
+        ],
         "hint": "original: 保留英文原文; llm_chinese: 使用 LLM 翻译为中文。",
         "default": "original"
       },

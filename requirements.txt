@@ -2,4 +2,3 @@ aiohttp
 feedparser
 pymupdf
 Pillow
-playwright

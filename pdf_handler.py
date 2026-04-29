@@ -7,6 +7,7 @@ PyMuPDF 为软依赖 —— 若未安装则相关功能优雅降级。
 from __future__ import annotations
 
 import asyncio
+import html as html_lib
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -207,6 +208,52 @@ async def resolve_pdf_url_from_webpage(
             return full_url
 
     return None
+
+
+async def extract_text_from_webpage(
+    url: str,
+    *,
+    timeout: int = 30,
+    proxy: str | None = None,
+    max_chars: int = 30000,
+) -> str:
+    """抓取网页并提取纯文本，用于 HTML 内容分析。"""
+    if not url:
+        return ""
+
+    proxy_url = _normalize_proxy(proxy)
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                url,
+                timeout=aiohttp.ClientTimeout(total=timeout),
+                allow_redirects=True,
+                proxy=proxy_url,
+            ) as resp:
+                resp.raise_for_status()
+                content_type = resp.headers.get("Content-Type", "").lower()
+                body = await resp.text(errors="ignore")
+                if "html" not in content_type and "<html" not in body.lower():
+                    return ""
+    except Exception:
+        logger.exception("抓取网页文本失败: %s", url)
+        return ""
+
+    body = re.sub(r"<script\b[^>]*>.*?</script>", " ", body, flags=re.I | re.S)
+    body = re.sub(r"<style\b[^>]*>.*?</style>", " ", body, flags=re.I | re.S)
+    body = re.sub(r"<noscript\b[^>]*>.*?</noscript>", " ", body, flags=re.I | re.S)
+    body = re.sub(r"<[^>]+>", " ", body)
+    body = html_lib.unescape(body)
+    body = re.sub(r"\s+", " ", body).strip()
+
+    if not body:
+        return ""
+
+    if len(body) > max_chars:
+        body = body[:max_chars]
+
+    return body
 
 
 def screenshot_first_page(

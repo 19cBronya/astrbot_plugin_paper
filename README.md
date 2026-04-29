@@ -14,7 +14,6 @@ ArXiv + Hugging Face 论文搜索与定时推送插件，适用于 [AstrBot](htt
 - **目标会话** — 支持 UMO 会话列表，可通过指令快捷添加/移除
 - **发送模式** — 支持合并转发和逐条发送两种模式
 - **PDF 截图** — PDF 首页截图，DPI 可自由调整
-- **HTML 截图回退** — Hugging Face 链接返回 HTML 且无可用 PDF 时，自动回退网页截图
 - **PDF 附件** — 可选附带 PDF 文件
 - **摘要处理** — 支持原文摘要或 LLM 翻译为中文
 - **摘要渲染** — 摘要可渲染为图片发送
@@ -107,7 +106,6 @@ ArXiv + Hugging Face 论文搜索与定时推送插件，适用于 [AstrBot](htt
 - `feedparser` — arXiv Atom XML 解析
 - `pymupdf` — PDF 文本提取和截图（软依赖，未安装时相关功能自动禁用）
 - `Pillow` — 摘要文本渲染为图片（软依赖）
-- `playwright` — Hugging Face HTML 网页截图（需安装浏览器：`playwright install`）
 
 ## 许可证
 
