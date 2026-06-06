@@ -13,8 +13,6 @@ import aiohttp
 
 from astrbot.api import logger
 
-from astrbot.api import logger
-
 HUGGINGFACE_API_URL = "https://huggingface.co/api/papers"
 _USER_AGENT = "AstrBot astrbot_plugin_paper/1.0"
 _MAX_RETRIES = 3
@@ -116,7 +114,10 @@ async def _fetch_api_json(
                 async with session.get(
                     HUGGINGFACE_API_URL,
                     params=params,
-                    timeout=aiohttp.ClientTimeout(total=timeout),
+                    timeout=aiohttp.ClientTimeout(
+                        total=timeout,
+                        sock_connect=min(15, timeout),
+                    ),
                     proxy=proxy_url,
                 ) as resp:
                     if resp.status == 429 or 500 <= resp.status < 600:
@@ -128,7 +129,19 @@ async def _fetch_api_json(
 
                     resp.raise_for_status()
                     return await resp.json()
-        except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+        except asyncio.TimeoutError:
+            # 超时：服务端响应慢，降级重试无意义
+            if proxy_url is not None:
+                logger.warning(
+                    "Hugging Face 请求代理 %s 超时，尝试直连",
+                    proxy_url,
+                )
+                proxy_url = None
+                continue
+            # 直连也超时，不再重试
+            raise
+        except aiohttp.ClientError as exc:
+            # 连接错误：可能是暂时性网络问题，可以重试
             if proxy_url is not None:
                 logger.warning(
                     "Hugging Face 请求代理 %s 失败，尝试直连: %s",
@@ -136,6 +149,8 @@ async def _fetch_api_json(
                     exc,
                 )
                 proxy_url = None
+                await asyncio.sleep(backoff_seconds)
+                backoff_seconds *= 2
                 continue
             if attempt == _MAX_RETRIES:
                 raise
@@ -148,7 +163,7 @@ async def _fetch_api_json(
 async def get_daily_papers(
     *,
     limit: int = 5,
-    timeout: int = 30,
+    timeout: int = 60,
     proxy: str | None = None,
 ) -> list[HuggingFacePaper]:
     """获取 Hugging Face 每日论文。
@@ -179,7 +194,7 @@ async def search_papers(
     query: str,
     *,
     limit: int = 5,
-    timeout: int = 30,
+    timeout: int = 60,
     proxy: str | None = None,
 ) -> list[HuggingFacePaper]:
     """按关键词搜索 Hugging Face 论文。

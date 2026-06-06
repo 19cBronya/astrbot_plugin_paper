@@ -267,7 +267,7 @@ class ArxivPlugin(Star):
         """第三次尝试：直接分析项目页 HTML 文本（不截图/不附件）。"""
         logger.info("[%s] 进入 HTML 内容分析回退。", paper.id)
 
-        timeout = self._huggingface_cfg.get("timeout_seconds", 30)
+        timeout = self._huggingface_cfg.get("timeout_seconds", 60)
         abstract_text = ""
         summary_text = ""
 
@@ -395,7 +395,7 @@ class ArxivPlugin(Star):
         2) 用标题在 arXiv 搜索并匹配；
         3) 直接分析 HTML 文本（不截图）。
         """
-        timeout = self._huggingface_cfg.get("timeout_seconds", 30)
+        timeout = self._huggingface_cfg.get("timeout_seconds", 60)
         warnings: list[str] = []
         paper_key = self._make_hf_cache_key(paper)
         linked_arxiv_id = ""
@@ -596,7 +596,7 @@ class ArxivPlugin(Star):
         categories = self._arxiv_cfg.get("categories", ["cs.AI"])
         tags = self._arxiv_cfg.get("tags", [])
         max_results = self._arxiv_cfg.get("max_results", 5)
-        timeout = self._arxiv_cfg.get("timeout_seconds", 30)
+        timeout = self._arxiv_cfg.get("timeout_seconds", 60)
 
         try:
             papers = await arxiv_client.get_latest_papers(
@@ -666,7 +666,7 @@ class ArxivPlugin(Star):
             return
 
         max_results = self._huggingface_cfg.get("max_results", 5)
-        timeout = self._huggingface_cfg.get("timeout_seconds", 30)
+        timeout = self._huggingface_cfg.get("timeout_seconds", 60)
 
         try:
             papers = await huggingface_client.get_daily_papers(
@@ -800,7 +800,7 @@ class ArxivPlugin(Star):
             self._cache.touch_paper_info(paper_key, self._build_arxiv_paper_info(paper))
             self._cache.store_arxiv_payload(paper_key, self._serialize_arxiv_paper(paper))
 
-        timeout = self._arxiv_cfg.get("timeout_seconds", 30)
+        timeout = self._arxiv_cfg.get("timeout_seconds", 60)
         max_pdf_size = self._send_cfg.get("max_pdf_size_mb", 20)
         send_abstract = self._send_cfg.get("send_abstract", True)
 
@@ -1066,7 +1066,7 @@ class ArxivPlugin(Star):
 
         logger.info("收到搜索请求: '%s'，数量: %d", query, max_results)
 
-        timeout = self._arxiv_cfg.get("timeout_seconds", 30)
+        timeout = self._arxiv_cfg.get("timeout_seconds", 60)
 
         try:
             papers = await arxiv_client.search_papers(
@@ -1126,7 +1126,7 @@ class ArxivPlugin(Star):
             return
 
         logger.info("收到 get 请求: '%s'", arxiv_id)
-        timeout = self._arxiv_cfg.get("timeout_seconds", 30)
+        timeout = self._arxiv_cfg.get("timeout_seconds", 60)
 
         yield event.plain_result(f"🔍 正在获取论文 {arxiv_id}，请稍候...")
 
@@ -1177,7 +1177,7 @@ class ArxivPlugin(Star):
         categories = self._arxiv_cfg.get("categories", ["cs.AI"])
         tags = self._arxiv_cfg.get("tags", [])
         max_results = self._arxiv_cfg.get("max_results", 5)
-        timeout = self._arxiv_cfg.get("timeout_seconds", 30)
+        timeout = self._arxiv_cfg.get("timeout_seconds", 60)
 
         logger.info("收到 latest 请求，分类: %s", categories)
 
@@ -1240,7 +1240,7 @@ class ArxivPlugin(Star):
 
         logger.info("收到 Hugging Face 搜索请求: '%s'，数量: %d", query, max_results)
 
-        timeout = self._huggingface_cfg.get("timeout_seconds", 30)
+        timeout = self._huggingface_cfg.get("timeout_seconds", 60)
 
         try:
             papers = await huggingface_client.search_papers(
@@ -1287,7 +1287,7 @@ class ArxivPlugin(Star):
     async def cmd_huggingface_latest(self, event: AstrMessageEvent):
         """手动获取 Hugging Face 每日论文。用法: /huggingface latest"""
         max_results = self._huggingface_cfg.get("max_results", 5)
-        timeout = self._huggingface_cfg.get("timeout_seconds", 30)
+        timeout = self._huggingface_cfg.get("timeout_seconds", 60)
 
         logger.info("收到 Hugging Face latest 请求")
 
