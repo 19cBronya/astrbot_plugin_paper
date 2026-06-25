@@ -38,19 +38,22 @@ _SOURCE_ARXIV = "arxiv"
 _SOURCE_HUGGINGFACE = "huggingface"
 
 
-def _time_to_cron(time_str: str) -> str:
+def _time_to_cron(time_str: str) -> str | None:
     """将 HH:MM 格式的时间字符串转换为 cron 表达式。
 
     例如 '09:00' -> '0 9 * * *', '14:30' -> '30 14 * * *'
+    当 time_str 为空或无法解析时返回 None，表示停止推送。
     """
+    if not time_str or not time_str.strip():
+        return None
     try:
         parts = time_str.strip().split(":")
         hour = int(parts[0])
         minute = int(parts[1]) if len(parts) > 1 else 0
         return f"{minute} {hour} * * *"
     except (ValueError, IndexError):
-        logger.warning("无法解析推送时间 '%s'，使用默认 09:00。", time_str)
-        return "0 9 * * *"
+        logger.warning("无法解析推送时间 '%s'，已停止该推送项目。", time_str)
+        return None
 
 
 @register(
@@ -536,9 +539,16 @@ class ArxivPlugin(Star):
 
     async def _register_cron_job(self) -> None:
         """注册定时推送任务。"""
-        push_time = self._send_cfg.get("push_time", "09:00")
+        push_time = (self._send_cfg.get("push_time", "") or "").strip()
+        if not push_time:
+            logger.info("ArXiv 推送时间为空，已停止该推送项目。")
+            return
+
         timezone = self._send_cfg.get("push_timezone", "Asia/Shanghai")
         cron_expr = _time_to_cron(push_time)
+        if cron_expr is None:
+            logger.warning("ArXiv 推送时间 '%s' 无效，已停止该推送项目。", push_time)
+            return
 
         try:
             job = await self.context.cron_manager.add_basic_job(
@@ -561,9 +571,16 @@ class ArxivPlugin(Star):
 
     async def _register_huggingface_cron_job(self) -> None:
         """注册 Hugging Face 定时推送任务。"""
-        push_time = self._send_cfg.get("huggingface_push_time", "10:00")
+        push_time = (self._send_cfg.get("huggingface_push_time", "") or "").strip()
+        if not push_time:
+            logger.info("Hugging Face 推送时间为空，已停止该推送项目。")
+            return
+
         timezone = self._send_cfg.get("push_timezone", "Asia/Shanghai")
         cron_expr = _time_to_cron(push_time)
+        if cron_expr is None:
+            logger.warning("Hugging Face 推送时间 '%s' 无效，已停止该推送项目。", push_time)
+            return
 
         try:
             job = await self.context.cron_manager.add_basic_job(
@@ -1333,7 +1350,7 @@ class ArxivPlugin(Star):
         """显示 ArXiv 配置和状态。"""
         categories = self._arxiv_cfg.get("categories", [])
         tags = self._arxiv_cfg.get("tags", [])
-        push_time = self._send_cfg.get("push_time", "09:00")
+        push_time = (self._send_cfg.get("push_time", "") or "").strip()
         timezone = self._send_cfg.get("push_timezone", "Asia/Shanghai")
         targets = self._send_cfg.get("target_sessions", [])
         use_forward = self._send_cfg.get("use_forward", True)
@@ -1343,6 +1360,7 @@ class ArxivPlugin(Star):
 
         mode_display = "合并转发" if use_forward else "逐条发送"
         abstract_display = "原文" if abstract_mode == "original" else "LLM 中文翻译"
+        push_time_display = push_time if push_time else "已停止"
 
         lines = [
             "📊 ArXiv 插件状态",
@@ -1350,7 +1368,7 @@ class ArxivPlugin(Star):
             f"📚 ArXiv 学科分类: {', '.join(categories) or '未配置'}",
             f"🏷️ ArXiv 关键词: {', '.join(tags) or '无'}",
             f"📄 ArXiv 每次推送: {max_results} 篇",
-            f"⏰ ArXiv 推送时间: {push_time}",
+            f"⏰ ArXiv 推送时间: {push_time_display}",
             f"🌍 推送时区: {timezone}",
             f"🎯 共享目标会话: {len(targets)} 个（ArXiv/Hugging Face 共用）",
             f"📨 发送模式: {mode_display}",
@@ -1366,7 +1384,7 @@ class ArxivPlugin(Star):
     @huggingface_group.command("status")
     async def cmd_huggingface_status(self, event: AstrMessageEvent):
         """显示 Hugging Face 配置和状态。"""
-        push_time = self._send_cfg.get("huggingface_push_time", "10:00")
+        push_time = (self._send_cfg.get("huggingface_push_time", "") or "").strip()
         timezone = self._send_cfg.get("push_timezone", "Asia/Shanghai")
         targets = self._send_cfg.get("target_sessions", [])
         use_forward = self._send_cfg.get("use_forward", True)
@@ -1376,12 +1394,13 @@ class ArxivPlugin(Star):
 
         mode_display = "合并转发" if use_forward else "逐条发送"
         abstract_display = "原文" if abstract_mode == "original" else "LLM 中文翻译"
+        push_time_display = push_time if push_time else "已停止"
 
         lines = [
             "📊 Hugging Face 插件状态",
             "",
             f"🤗 Hugging Face 每次推送: {max_results} 篇",
-            f"⏰ Hugging Face 推送时间: {push_time}",
+            f"⏰ Hugging Face 推送时间: {push_time_display}",
             f"🌍 推送时区: {timezone}",
             f"🎯 共享目标会话: {len(targets)} 个（ArXiv/Hugging Face 共用）",
             f"📨 发送模式: {mode_display}",
