@@ -2,6 +2,7 @@
 
 面向 [AstrBot](https://github.com/AstrBotDevs/AstrBot) 的多来源论文插件，支持 ArXiv 与 Hugging Face 的检索、获取、定时推送与去重，并提供 LLM 摘要处理与 PDF 增强能力。
 
+Fork from [astrbot_plugin_arxiv](https://github.com/NayukiChiba/astrbot_plugin_arxiv)
 ## 功能特性
 
 - **多来源检索** - 同时支持 ArXiv 与 Hugging Face 论文来源
