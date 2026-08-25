@@ -218,7 +218,13 @@ class PaperCache:
         self._save()
         return dest
 
-    def get_cached_abstract_image(self, paper_key: str, *, abstract_text: str) -> Path | None:
+    def get_cached_abstract_image(
+        self,
+        paper_key: str,
+        *,
+        abstract_text: str,
+        renderer_key: str = "legacy",
+    ) -> Path | None:
         if not abstract_text:
             return None
         record = self._get_or_create_record(paper_key)
@@ -226,7 +232,7 @@ class PaperCache:
         if not isinstance(images, dict):
             return None
 
-        key = self._hash_text(abstract_text)
+        key = self._hash_text(renderer_key + "\0" + abstract_text)
         meta = images.get(key)
         if not isinstance(meta, dict):
             return None
@@ -249,13 +255,14 @@ class PaperCache:
         *,
         abstract_text: str,
         source_path: Path,
+        renderer_key: str = "legacy",
     ) -> Path | None:
         if not abstract_text or not source_path.exists() or not source_path.is_file():
             return None
 
         self._files_dir.mkdir(parents=True, exist_ok=True)
         suffix = source_path.suffix if source_path.suffix else ".png"
-        text_hash = self._hash_text(abstract_text)
+        text_hash = self._hash_text(renderer_key + "\0" + abstract_text)
         name = f"{self._safe_name(paper_key)}_abs_{text_hash[:10]}{suffix}"
         dest = self._files_dir / name
         shutil.copy2(source_path, dest)
@@ -267,6 +274,7 @@ class PaperCache:
             record["abstract_images"] = images
         images[text_hash] = {
             "path": str(dest.relative_to(self._root)),
+            "renderer_key": renderer_key,
             "updated_at": time.time(),
         }
         record["updated_at"] = time.time()

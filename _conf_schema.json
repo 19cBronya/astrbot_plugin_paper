@@ -117,6 +117,22 @@
         "hint": "开启后摘要单独渲染为长图片发送，关闭则以纯文本形式发送。",
         "default": false
       },
+      "abstract_image_renderer": {
+        "description": "摘要图片渲染器",
+        "type": "string",
+        "options": [
+          "t2i",
+          "pillow"
+        ],
+        "default": "t2i",
+        "hint": "t2i 使用 AstrBot 当前模板，支持 Markdown/KaTeX；pillow 仅支持纯文本，并要求 AstrBot 主容器安装 CJK 字体。"
+      },
+      "abstract_font_path": {
+        "description": "摘要图片 CJK 字体路径（仅 pillow 模式）",
+        "type": "string",
+        "default": "",
+        "hint": "仅在 pillow 模式使用。可填写容器内字体绝对路径，例如 /AstrBot/data/fonts/NotoSansCJK-Regular.ttc。"
+      },
       "attach_pdf": {
         "description": "附带 PDF 文件",
         "type": "bool",
