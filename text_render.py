@@ -1,6 +1,12 @@
 """Abstract text to image renderer.
 
 Uses Pillow to render the abstract text into a clean, readable long image.
+
+This module is a pure-text compatibility renderer. For Markdown/KaTeX support
+prefer AstrBot's T2I service (renderer ``t2i``). This renderer only draws plain
+text and requires a CJK font to be available; it never falls back to
+``ImageFont.load_default()`` (which has no CJK glyphs and would silently render
+Chinese as boxes).
 """
 
 from __future__ import annotations
@@ -24,39 +30,73 @@ _FONT_SIZE = 22
 _TITLE_FONT_SIZE = 26
 _CHARS_PER_LINE = 34  # CJK chars per line at this width
 
+# Default CJK font candidates, checked in order after the user-configured path.
+_DEFAULT_FONT_PATHS = [
+    "/AstrBot/data/font.ttf",
+    "/AstrBot/data/fonts/NotoSansCJK-Regular.ttc",
+    # Windows
+    "C:/Windows/Fonts/msyh.ttc",  # Microsoft YaHei
+    "C:/Windows/Fonts/simhei.ttf",  # SimHei
+    "C:/Windows/Fonts/simsun.ttc",  # SimSun
+    # Linux
+    "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+    "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
+    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+    "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+    "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
+    # macOS
+    "/System/Library/Fonts/PingFang.ttc",
+    "/System/Library/Fonts/STHeiti Light.ttc",
+]
 
-def _get_font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont:
-    """Try to load a system CJK font, fallback to default."""
-    font_candidates = [
-        # Windows
-        "C:/Windows/Fonts/msyh.ttc",  # Microsoft YaHei
-        "C:/Windows/Fonts/simhei.ttf",  # SimHei
-        "C:/Windows/Fonts/simsun.ttc",  # SimSun
-        # Linux
-        "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
-        "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
-        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-        "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
-        "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
-        # macOS
-        "/System/Library/Fonts/PingFang.ttc",
-        "/System/Library/Fonts/STHeiti Light.ttc",
-    ]
+_BOLD_FONT_PATHS = [
+    "C:/Windows/Fonts/msyhbd.ttc",
+    "C:/Windows/Fonts/simhei.ttf",
+    "/usr/share/fonts/truetype/noto/NotoSansCJK-Bold.ttc",
+]
+
+
+def _get_font(
+    size: int,
+    bold: bool = False,
+    font_path: str | None = None,
+) -> ImageFont.FreeTypeFont | None:
+    """Try to load a usable CJK font.
+
+    Lookup order:
+      1. user-configured ``font_path`` (if provided)
+      2. ``/AstrBot/data/font.ttf``
+      3. ``/AstrBot/data/fonts/NotoSansCJK-Regular.ttc``
+      4. known Windows/Linux/macOS candidate fonts
+
+    Returns the loaded font, or ``None`` when no CJK font could be found.
+    Never falls back to ``ImageFont.load_default()`` since it has no CJK glyphs.
+    """
+    candidates: list[str] = []
+    if font_path:
+        candidates.append(font_path)
     if bold:
-        bold_candidates = [
-            "C:/Windows/Fonts/msyhbd.ttc",
-            "C:/Windows/Fonts/simhei.ttf",
-            "/usr/share/fonts/truetype/noto/NotoSansCJK-Bold.ttc",
-        ]
-        font_candidates = bold_candidates + font_candidates
+        candidates.extend(_BOLD_FONT_PATHS)
+    candidates.extend(_DEFAULT_FONT_PATHS)
 
-    for path in font_candidates:
+    checked: list[str] = []
+    for path in candidates:
+        if path in checked:
+            continue
+        checked.append(path)
         try:
-            return ImageFont.truetype(path, size)
+            font = ImageFont.truetype(path, size)
         except OSError:
             continue
+        logger.debug("使用 CJK 字体渲染摘要图片: %s", path)
+        return font
 
-    return ImageFont.load_default()
+    logger.warning(
+        "未找到可用于摘要图片渲染的 CJK 字体，已检查路径: %s。"
+        "请安装 CJK 字体或在配置中设置 abstract_font_path。",
+        ", ".join(checked),
+    )
+    return None
 
 
 def _wrap_text(text: str, chars_per_line: int = _CHARS_PER_LINE) -> list[str]:
@@ -93,6 +133,7 @@ def render_abstract_image(
     output_path: Path,
     *,
     title: str = "摘要 / Abstract",
+    font_path: str | None = None,
 ) -> Path | None:
     """Render abstract text as a clean long image.
 
@@ -100,16 +141,22 @@ def render_abstract_image(
         abstract: The abstract text to render.
         output_path: Where to save the PNG image.
         title: Title displayed at top of image.
+        font_path: Optional explicit path to a CJK font file. When not provided,
+            known system CJK fonts are tried in order.
 
     Returns:
-        Path to the rendered image, or None on failure.
+        Path to the rendered image, or None on failure (e.g. no CJK font
+        available).
     """
     if not abstract:
         return None
 
     try:
-        font = _get_font(_FONT_SIZE)
-        title_font = _get_font(_TITLE_FONT_SIZE, bold=True)
+        font = _get_font(_FONT_SIZE, font_path=font_path)
+        title_font = _get_font(_TITLE_FONT_SIZE, bold=True, font_path=font_path)
+        if font is None or title_font is None:
+            logger.warning("缺少 CJK 字体，无法渲染摘要图片，将以文本形式发送。")
+            return None
 
         # Wrap text
         text_lines = _wrap_text(abstract)

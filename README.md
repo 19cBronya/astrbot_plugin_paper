@@ -90,7 +90,9 @@ Fork from [astrbot_plugin_arxiv](https://github.com/NayukiChiba/astrbot_plugin_a
 | `arxiv_bot_name` | string | `"ArXiv Bot"` | ArXiv 来源显示昵称 |
 | `huggingface_bot_name` | string | `"Hugging Face Bot"` | Hugging Face 来源显示昵称 |
 | `send_abstract` | bool | `true` | 是否发送摘要 |
-| `abstract_as_image` | bool | `false` | 是否将摘要渲染为图片 |
+| `abstract_as_image` | bool | `false` | 是否将摘要渲染为图片（默认关闭，直接以纯文本发送） |
+| `abstract_image_renderer` | string | `"t2i"` | 摘要图片渲染器：`t2i`（默认）使用 AstrBot 当前启用的 T2I 模板，支持 Markdown/KaTeX；`pillow` 仅支持纯文本 |
+| `abstract_font_path` | string | `""` | 仅 `pillow` 模式使用：CJK 字体绝对路径（如 `/AstrBot/data/fonts/NotoSansCJK-Regular.ttc`），留空则自动探测系统字体 |
 | `attach_pdf` | bool | `true` | 是否附带 PDF 文件 |
 | `screenshot_pdf` | bool | `true` | 是否截图 PDF 首页 |
 | `screenshot_dpi` | int | `150` | PDF 首页截图 DPI |
@@ -105,6 +107,17 @@ Fork from [astrbot_plugin_arxiv](https://github.com/NayukiChiba/astrbot_plugin_a
 | `llm_summarize` | bool | `false` | 是否启用 LLM 论文总结 |
 | `llm_provider_id` | string | `""` | LLM 提供商 ID（留空时使用当前对话默认提供商） |
 | `llm_summary_prompt` | text | `""` | 自定义总结 Prompt（需包含 `{content}`） |
+
+### 摘要图片渲染
+
+`abstract_as_image` 默认 `false`，即摘要默认以纯文本发送。
+
+开启 `abstract_as_image=true` 后，由 `abstract_image_renderer` 决定渲染方式：
+
+- **`t2i`（默认）**：调用 AstrBot 当前启用的文本转图片（T2I）模板渲染，支持中文、Markdown 与 KaTeX 公式，具体支持程度取决于当前模板。推荐生产环境使用。
+- **`pillow`**：使用 Pillow 在插件进程内绘制纯文本长图，不支持 LaTeX/KaTeX 公式。需要 AstrBot **主容器**（而非 t2i-service 容器）安装 CJK 字体，可通过 `abstract_font_path` 指定字体路径；找不到 CJK 字体时插件会回退为发送纯文本，不会生成乱码方框图片。
+
+任一路径渲染失败（T2I 异常/结果文件缺失、Pillow 缺字体）时，摘要都会自动回退为纯文本发送。
 
 ## 依赖
 

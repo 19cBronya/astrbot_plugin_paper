@@ -350,29 +350,16 @@ class ArxivPlugin(Star):
                 warnings.append("缺少可访问网页链接，无法执行 HTML 内容分析。")
 
         abstract_image_path = ""
-        use_abstract_image = self._send_cfg.get("abstract_as_image", True)
+        use_abstract_image = self._send_cfg.get("abstract_as_image", False)
         if send_abstract and abstract_text and use_abstract_image:
-            if self._cache:
-                cached_img = self._cache.get_cached_abstract_image(
-                    paper_key,
-                    abstract_text=abstract_text,
-                )
-                if cached_img:
-                    abstract_image_path = str(cached_img)
-            if not abstract_image_path:
-                img_name = f"abstract_hf_{paper.id.replace('/', '_')}.png"
-                img_path = self._temp_dir / img_name
-                rendered = text_render.render_abstract_image(abstract_text, img_path)
-                if rendered:
-                    if self._cache:
-                        cached_img = self._cache.store_abstract_image(
-                            paper_key,
-                            abstract_text=abstract_text,
-                            source_path=rendered,
-                        )
-                        abstract_image_path = str(cached_img or rendered)
-                    else:
-                        abstract_image_path = str(rendered)
+            img_name = f"abstract_hf_{paper.id.replace('/', '_')}.png"
+            img_path = self._temp_dir / img_name
+            abstract_image_path = await self._resolve_abstract_image(
+                paper_key,
+                abstract_text,
+                img_path,
+                paper_label=paper.id,
+            )
 
         return formatter.build_paper_chains(
             paper,
@@ -751,6 +738,136 @@ class ArxivPlugin(Star):
         mer.use_t2i_ = False
         return mer
 
+    def _abstract_renderer(self) -> str:
+        """返回规范化后的摘要图片渲染器名称（``t2i`` / ``pillow``）。"""
+        renderer = str(
+            self._send_cfg.get("abstract_image_renderer", "t2i") or "t2i"
+        ).strip().lower()
+        if renderer not in ("t2i", "pillow"):
+            logger.warning(
+                "未知的 abstract_image_renderer=%r，已回退到 t2i。", renderer
+            )
+            return "t2i"
+        return renderer
+
+    def _abstract_renderer_key(self) -> str:
+        """返回当前渲染器对应的摘要图片缓存键前缀。"""
+        return f"{self._abstract_renderer()}-v2"
+
+    async def _render_abstract_image(
+        self,
+        abstract_text: str,
+        output_path: Path,
+    ) -> tuple[Path | None, str]:
+        """使用当前配置的渲染器渲染摘要图片。
+
+        Returns:
+            ``(渲染后的图片路径, 渲染器缓存键)``。渲染失败时返回
+            ``(None, 渲染器缓存键)``，调用方应回退为发送纯文本，且不得
+            再回退到 Pillow 的 ``ImageFont.load_default()`` 生成乱码图片。
+        """
+        renderer = self._abstract_renderer()
+        if renderer == "pillow":
+            return self._render_abstract_image_via_pillow(abstract_text, output_path)
+        return await self._render_abstract_image_via_t2i(abstract_text)
+
+    async def _render_abstract_image_via_t2i(
+        self,
+        abstract_text: str,
+    ) -> tuple[Path | None, str]:
+        """通过 AstrBot 当前启用的 T2I 模板渲染摘要图片。"""
+        try:
+            result = await self.text_to_image(abstract_text, return_url=False)
+        except Exception:
+            logger.exception("调用 T2I 渲染摘要图片失败，将以文本形式发送。")
+            return None, "t2i-v2"
+
+        if not result:
+            logger.warning("T2I 渲染摘要图片返回空结果，将以文本形式发送。")
+            return None, "t2i-v2"
+
+        try:
+            path = Path(result)
+        except (TypeError, ValueError):
+            logger.warning("T2I 渲染结果不是合法路径: %r，将以文本形式发送。", result)
+            return None, "t2i-v2"
+
+        if not path.exists() or not path.is_file():
+            logger.warning("T2I 渲染结果文件不存在: %s，将以文本形式发送。", path)
+            return None, "t2i-v2"
+
+        return path, "t2i-v2"
+
+    def _render_abstract_image_via_pillow(
+        self,
+        abstract_text: str,
+        output_path: Path,
+    ) -> tuple[Path | None, str]:
+        """通过 Pillow 渲染纯文本摘要图片（显式选择的兼容模式）。"""
+        font_path = str(
+            self._send_cfg.get("abstract_font_path", "") or ""
+        ).strip() or None
+        try:
+            rendered = text_render.render_abstract_image(
+                abstract_text,
+                output_path,
+                font_path=font_path,
+            )
+        except Exception:
+            logger.exception("Pillow 渲染摘要图片失败，将以文本形式发送。")
+            return None, "pillow-v2"
+
+        if not rendered:
+            logger.warning("Pillow 渲染摘要图片失败，将以文本形式发送。")
+            return None, "pillow-v2"
+
+        return rendered, "pillow-v2"
+
+    async def _resolve_abstract_image(
+        self,
+        paper_key: str,
+        abstract_text: str,
+        img_path: Path,
+        *,
+        paper_label: str = "",
+    ) -> str:
+        """获取摘要图片路径：优先命中缓存，否则调用统一渲染方法。
+
+        Returns:
+            摘要图片绝对路径；失败时返回空字符串（调用方将回退为纯文本）。
+        """
+        renderer_key = self._abstract_renderer_key()
+        if self._cache:
+            cached_img = self._cache.get_cached_abstract_image(
+                paper_key,
+                abstract_text=abstract_text,
+                renderer_key=renderer_key,
+            )
+            if cached_img:
+                if paper_label:
+                    logger.info("[%s] 摘要图片命中缓存。", paper_label)
+                return str(cached_img)
+
+        rendered, rendered_key = await self._render_abstract_image(
+            abstract_text, img_path
+        )
+        if not rendered:
+            if paper_label:
+                logger.warning(
+                    "[%s] 摘要图片渲染失败，将以文本形式发送。", paper_label
+                )
+            return ""
+
+        if self._cache:
+            cached_img = self._cache.store_abstract_image(
+                paper_key,
+                abstract_text=abstract_text,
+                source_path=rendered,
+                renderer_key=rendered_key,
+            )
+            return str(cached_img or rendered)
+        return str(rendered)
+
     async def _process_papers(
         self,
         papers: list[arxiv_client.ArxivPaper],
@@ -965,39 +1082,21 @@ class ArxivPlugin(Star):
 
         # 摘要渲染为图片（或文本）
         abstract_image_path = ""
-        use_abstract_image = self._send_cfg.get("abstract_as_image", True)
+        use_abstract_image = self._send_cfg.get("abstract_as_image", False)
         if send_abstract and abstract_text and use_abstract_image:
-            if self._cache:
-                cached_img = self._cache.get_cached_abstract_image(
-                    paper_key,
-                    abstract_text=abstract_text,
+            logger.info("[%s] 渲染摘要为图片...", paper.arxiv_id)
+            img_name = f"abstract_{paper.arxiv_id.replace('/', '_')}.png"
+            img_path = self._temp_dir / img_name
+            abstract_image_path = await self._resolve_abstract_image(
+                paper_key,
+                abstract_text,
+                img_path,
+                paper_label=paper.arxiv_id,
+            )
+            if abstract_image_path:
+                logger.info(
+                    "[%s] 摘要图片渲染成功: %s", paper.arxiv_id, abstract_image_path
                 )
-                if cached_img:
-                    abstract_image_path = str(cached_img)
-                    logger.info("[%s] 摘要图片命中缓存。", paper.arxiv_id)
-            if not abstract_image_path:
-                logger.info("[%s] 渲染摘要为图片...", paper.arxiv_id)
-                img_name = f"abstract_{paper.arxiv_id.replace('/', '_')}.png"
-                img_path = self._temp_dir / img_name
-                rendered = text_render.render_abstract_image(
-                    abstract_text,
-                    img_path,
-                )
-                if rendered:
-                    if self._cache:
-                        cached_img = self._cache.store_abstract_image(
-                            paper_key,
-                            abstract_text=abstract_text,
-                            source_path=rendered,
-                        )
-                        abstract_image_path = str(cached_img or rendered)
-                    else:
-                        abstract_image_path = str(rendered)
-                    logger.info("[%s] 摘要图片渲染成功: %s", paper.arxiv_id, abstract_image_path)
-                else:
-                    logger.warning(
-                        "[%s] 摘要图片渲染失败，将以文本形式发送。", paper.arxiv_id
-                    )
 
         # PDF 附件
         if downloaded_pdf and self._send_cfg.get("attach_pdf", False):
